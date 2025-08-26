@@ -1,0 +1,121 @@
+# BMad Quality Gate: Epic 1 Story 1.0 Prerequisites
+# CRITICAL: This gate MUST pass before ANY development begins
+
+gate_id: QG-1.0-PREREQ
+epic: 1
+story: 0
+title: External Service Prerequisites Gate
+severity: BLOCKING
+enforced: true
+
+# Gate Criteria (ALL must pass)
+criteria:
+  neo4j_connection:
+    description: Neo4j Aura Professional account created and accessible
+    required: true
+    verification:
+      command: npm run verify:neo4j
+      expected_output: "✅ Neo4j connection verified"
+    value_blocked: 60  # $/acre if not working
+    
+  aws_account:
+    description: AWS account with programmatic access configured
+    required: true
+    verification:
+      command: npm run verify:aws
+      expected_output: "✅ AWS credentials valid"
+    services_blocked:
+      - S3 storage
+      - Lambda functions
+      - CloudFront CDN
+      
+  weather_apis:
+    description: Weather 20/20 and Kansas Mesonet API keys obtained
+    required: true
+    verification:
+      command: npm run verify:weather
+      expected_output: "✅ Weather APIs accessible"
+    value_blocked: 15  # $/acre from herbicide checking
+    
+  github_repository:
+    description: GitHub organization and repository created
+    required: true
+    verification:
+      command: git remote -v
+      expected_output: "origin.*github.com"
+      
+# Automated Enforcement
+enforcement:
+  pre_commit_hook: true
+  ci_pipeline: true
+  deployment_gate: true
+  
+  failure_message: |
+    ❌ DEVELOPMENT BLOCKED: Prerequisites not met
+    
+    Required actions:
+    1. Complete Story 1.0 user actions
+    2. Store credentials securely
+    3. Run: npm run verify:all
+    
+    Cannot proceed without ALL external services configured.
+    
+# Test Cases
+test_cases:
+  - id: TC-1.0.1
+    name: Verify Neo4j connectivity
+    type: integration
+    steps:
+      - Connect to Neo4j with provided credentials
+      - Create test node
+      - Query test node
+      - Delete test node
+    expected: All operations succeed
+    
+  - id: TC-1.0.2
+    name: Verify AWS IAM permissions
+    type: integration
+    steps:
+      - Authenticate with AWS credentials
+      - List S3 buckets
+      - Create test object
+      - Delete test object
+    expected: Proper permissions for all services
+    
+  - id: TC-1.0.3
+    name: Verify weather API rate limits
+    type: integration
+    steps:
+      - Call Weather 20/20 API
+      - Call Kansas Mesonet API
+      - Check rate limit headers
+    expected: Sufficient rate limits for production
+    
+# Risk Assessment
+risks:
+  - description: Neo4j connection failure
+    probability: medium
+    impact: critical
+    mitigation: Backup connection string, failover region
+    
+  - description: Weather API rate limits exceeded
+    probability: low
+    impact: high
+    mitigation: Caching layer, request batching
+    
+# Metrics
+metrics:
+  setup_time: 2 hours
+  verification_time: 5 minutes
+  value_at_risk: "$60/acre"
+  blocked_features: "ALL"
+  
+# Sign-off
+sign_off:
+  qa_lead: required
+  tech_lead: required
+  product_owner: required
+  
+status: ACTIVE
+last_verified: null
+next_review: "Before Epic 1 Sprint"

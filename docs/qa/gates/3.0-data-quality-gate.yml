@@ -1,0 +1,86 @@
+# BMad Quality Gate: Epic 3 Story 3.0 Data Quality
+# ML features blocked without quality data
+
+gate_id: QG-3.0-DATA
+epic: 3
+story: 0
+title: Data Quality Gate for ML Readiness
+severity: BLOCKING
+enforced: true
+
+criteria:
+  field_boundaries:
+    description: Field boundaries with <5m precision
+    required: true
+    threshold: 5  # meters
+    verification:
+      query: "MATCH (f:Field) WHERE f.precision_meters <= 5 RETURN count(f)"
+    value_blocked: 15  # $/acre
+    
+  soil_test_history:
+    description: Minimum soil test data for ML
+    required: true
+    minimum_years: 1  # 3 preferred
+    verification:
+      query: "MATCH (f:Field)-[:HAS_SOIL_TEST]->(s) RETURN count(DISTINCT s.year)"
+    impact: "Reduced prediction confidence"
+    
+  yield_history:
+    description: Historical yield data for training
+    required: true
+    minimum_years: 2
+    verification:
+      command: "python scripts/check_yield_data.py"
+    value_blocked: 20  # $/acre
+    
+  rotation_history:
+    description: Complete rotation records with herbicides
+    required: true
+    minimum_years: 3
+    includes_herbicides: true
+    
+  data_quality_score:
+    description: Overall data quality metric
+    required: true
+    minimum: 0.80
+    calculation: "weighted average of all dimensions"
+    
+enforcement:
+  ml_predictions:
+    blocked_if: "quality_score < 0.80"
+    error_message: "Insufficient data quality for ML predictions"
+    
+  optimization:
+    blocked_if: "missing critical data"
+    error_message: "Cannot optimize without complete data"
+    
+test_cases:
+  - id: TC-3.0.1
+    name: ML blocked without quality data
+    steps:
+      - Create field with poor data
+      - Attempt yield prediction
+      - Verify blocked with clear message
+    expected: DataQualityError raised
+    
+  - id: TC-3.0.2
+    name: Quality score calculation
+    steps:
+      - Add varying data quality
+      - Calculate score
+      - Verify weighted correctly
+    expected: Score reflects data completeness
+    
+risks:
+  - description: Users frustrated by data requirements
+    mitigation: Clear guidance on what's needed and why
+    
+  - description: Legacy data insufficient
+    mitigation: Progressive enhancement, show value with partial data
+    
+metrics:
+  fields_ml_ready: "Percentage with score > 0.80"
+  average_quality_score: "Across all fields"
+  value_unlocked: "$/acre available with quality data"
+  
+status: ACTIVE
