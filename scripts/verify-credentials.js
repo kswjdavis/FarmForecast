@@ -5,11 +5,12 @@
  * Validates all external service connections before development
  */
 
-require('dotenv').config();
-const neo4j = require('neo4j-driver');
-const AWS = require('@aws-sdk/client-sts');
-const https = require('https');
-const fs = require('fs').promises;
+import { config } from 'dotenv';
+import neo4j from 'neo4j-driver';
+import { STSClient, GetCallerIdentityCommand } from '@aws-sdk/client-sts';
+import { promises as fs } from 'fs';
+
+config();
 
 // Color codes for terminal output
 const colors = {
@@ -18,7 +19,7 @@ const colors = {
   red: '\x1b[31m',
   yellow: '\x1b[33m',
   blue: '\x1b[34m',
-  bold: '\x1b[1m'
+  bold: '\x1b[1m',
 };
 
 const log = {
@@ -26,20 +27,41 @@ const log = {
   error: (msg) => console.log(`${colors.red}✗${colors.reset} ${msg}`),
   warning: (msg) => console.log(`${colors.yellow}⚠${colors.reset} ${msg}`),
   info: (msg) => console.log(`${colors.blue}ℹ${colors.reset} ${msg}`),
-  header: (msg) => console.log(`\n${colors.bold}${msg}${colors.reset}`)
+  header: (msg) => console.log(`\n${colors.bold}${msg}${colors.reset}`),
 };
 
 // Track verification results
 const results = {
   required: {},
   optional: {},
-  warnings: []
+  warnings: [],
 };
+
+// Retry logic with exponential backoff
+async function retryWithBackoff(fn, maxRetries = 3, initialDelay = 1000) {
+  let lastError;
+
+  for (let attempt = 0; attempt < maxRetries; attempt++) {
+    try {
+      return await fn();
+    } catch (error) {
+      lastError = error;
+
+      if (attempt < maxRetries - 1) {
+        const delay = initialDelay * Math.pow(2, attempt);
+        log.warning(`Attempt ${attempt + 1} failed, retrying in ${delay}ms...`);
+        await new Promise((resolve) => setTimeout(resolve, delay));
+      }
+    }
+  }
+
+  throw lastError;
+}
 
 // 1. Check Neo4j Connection
 async function verifyNeo4j() {
   log.header('Neo4j Database Connection');
-  
+
   if (!process.env.NEO4J_URI || !process.env.NEO4J_PASSWORD) {
     log.error('NEO4J_URI or NEO4J_PASSWORD not set');
     results.required.neo4j = false;
@@ -52,11 +74,17 @@ async function verifyNeo4j() {
   );
 
   try {
-    await driver.verifyConnectivity();
-    const session = driver.session();
-    const result = await session.run('RETURN 1 as test');
-    await session.close();
-    
+    await retryWithBackoff(
+      async () => {
+        await driver.verifyConnectivity();
+        const session = driver.session();
+        await session.run('RETURN 1 as test');
+        await session.close();
+      },
+      3,
+      2000
+    );
+
     log.success(`Connected to Neo4j at ${process.env.NEO4J_URI}`);
     log.info(`Database: ${process.env.NEO4J_DATABASE || 'neo4j'}`);
     results.required.neo4j = true;
@@ -73,34 +101,42 @@ async function verifyNeo4j() {
 // 2. Check AWS Credentials
 async function verifyAWS() {
   log.header('AWS Credentials');
-  
+
   if (!process.env.AWS_ACCESS_KEY_ID || !process.env.AWS_SECRET_ACCESS_KEY) {
     log.error('AWS_ACCESS_KEY_ID or AWS_SECRET_ACCESS_KEY not set');
     results.required.aws = false;
     return false;
   }
 
-  const client = new AWS.STSClient({ 
+  const client = new STSClient({
     region: process.env.AWS_REGION || 'us-west-2',
     credentials: {
       accessKeyId: process.env.AWS_ACCESS_KEY_ID,
-      secretAccessKey: process.env.AWS_SECRET_ACCESS_KEY
-    }
+      secretAccessKey: process.env.AWS_SECRET_ACCESS_KEY,
+    },
   });
 
   try {
-    const command = new AWS.GetCallerIdentityCommand({});
-    const response = await client.send(command);
-    
+    const response = await retryWithBackoff(
+      async () => {
+        const command = new GetCallerIdentityCommand({});
+        return await client.send(command);
+      },
+      3,
+      1500
+    );
+
     log.success(`AWS Account verified: ${response.Account}`);
     log.info(`User ARN: ${response.Arn}`);
     log.info(`Region: ${process.env.AWS_REGION || 'us-west-2'}`);
-    
+
     if (process.env.AWS_ACCOUNT_ID && response.Account !== process.env.AWS_ACCOUNT_ID) {
-      log.warning(`Account ID mismatch! Expected: ${process.env.AWS_ACCOUNT_ID}, Got: ${response.Account}`);
+      log.warning(
+        `Account ID mismatch! Expected: ${process.env.AWS_ACCOUNT_ID}, Got: ${response.Account}`
+      );
       results.warnings.push('AWS account ID mismatch');
     }
-    
+
     results.required.aws = true;
     return true;
   } catch (error) {
@@ -113,36 +149,39 @@ async function verifyAWS() {
 // 3. Check Weather APIs
 async function verifyWeatherAPIs() {
   log.header('Weather API Services');
-  
+
   const weatherServices = [
     {
-      name: 'Weather 20/20',
+      name: 'Visual Crossing',
       required: true,
-      envKey: 'WEATHER2020_API_KEY',
-      urlKey: 'WEATHER2020_API_URL',
-      testEndpoint: '/health'
+      envKey: 'VISUALCROSSING_API_KEY',
+      urlKey: 'VISUALCROSSING_API_URL',
+      testEndpoint: '/timeline/test/today',
+      testUrl:
+        'https://weather.visualcrossing.com/VisualCrossingWebServices/rest/services/timeline/Kansas City/today',
     },
     {
-      name: 'Kansas Mesonet',
+      name: 'NOAA',
       required: true,
-      envKey: 'MESONET_API_KEY',
-      urlKey: 'MESONET_API_URL',
-      testEndpoint: '/stations'
+      envKey: 'NOAA_API_TOKEN',
+      urlKey: 'NOAA_API_URL',
+      testEndpoint: '/stations',
+      testUrl: 'https://www.ncdc.noaa.gov/cdo-web/api/v2/stations?limit=1',
     },
     {
       name: 'OpenWeather',
       required: false,
       envKey: 'OPENWEATHER_API_KEY',
       urlKey: 'OPENWEATHER_API_URL',
-      testEndpoint: null // Will construct based on API
+      testEndpoint: null,
     },
     {
-      name: 'NOAA',
+      name: 'Kansas Mesonet',
       required: false,
-      envKey: 'NOAA_API_TOKEN',
-      urlKey: 'NOAA_API_URL',
-      testEndpoint: '/stations'
-    }
+      envKey: 'MESONET_API_KEY',
+      urlKey: 'MESONET_API_URL',
+      testEndpoint: '/stations',
+    },
   ];
 
   let allRequiredPass = true;
@@ -160,14 +199,53 @@ async function verifyWeatherAPIs() {
       continue;
     }
 
-    // For now, just check that the keys exist
-    // In production, you'd make actual API calls to verify
-    if (service.required) {
-      log.success(`${service.name}: API key configured`);
-      results.required[service.name.toLowerCase().replace(/\s+/g, '_')] = true;
+    // Test actual API connectivity for required services
+    if (service.name === 'Visual Crossing') {
+      try {
+        const testUrl = `${service.testUrl}?key=${process.env[service.envKey]}&unitGroup=us&include=current`;
+        const response = await fetch(testUrl);
+
+        if (response.ok) {
+          log.success(`${service.name}: API key verified (1000 requests/day free tier)`);
+          results.required[service.name.toLowerCase().replace(/\s+/g, '_')] = true;
+        } else {
+          log.error(`${service.name}: API returned ${response.status}`);
+          results.required[service.name.toLowerCase().replace(/\s+/g, '_')] = false;
+          allRequiredPass = false;
+        }
+      } catch (error) {
+        log.error(`${service.name}: Connection failed - ${error.message}`);
+        results.required[service.name.toLowerCase().replace(/\s+/g, '_')] = false;
+        allRequiredPass = false;
+      }
+    } else if (service.name === 'NOAA') {
+      try {
+        const response = await fetch(service.testUrl, {
+          headers: { token: process.env[service.envKey] },
+        });
+
+        if (response.ok) {
+          log.success(`${service.name}: API token verified (free government data)`);
+          results.required[service.name.toLowerCase().replace(/\s+/g, '_')] = true;
+        } else {
+          log.error(`${service.name}: API returned ${response.status}`);
+          results.required[service.name.toLowerCase().replace(/\s+/g, '_')] = false;
+          allRequiredPass = false;
+        }
+      } catch (error) {
+        log.error(`${service.name}: Connection failed - ${error.message}`);
+        results.required[service.name.toLowerCase().replace(/\s+/g, '_')] = false;
+        allRequiredPass = false;
+      }
     } else {
-      log.success(`${service.name}: API key configured (optional)`);
-      results.optional[service.name.toLowerCase().replace(/\s+/g, '_')] = true;
+      // Optional services - just check key exists
+      if (service.required) {
+        log.success(`${service.name}: API key configured`);
+        results.required[service.name.toLowerCase().replace(/\s+/g, '_')] = true;
+      } else {
+        log.success(`${service.name}: API key configured (optional)`);
+        results.optional[service.name.toLowerCase().replace(/\s+/g, '_')] = true;
+      }
     }
   }
 
@@ -177,7 +255,7 @@ async function verifyWeatherAPIs() {
 // 4. Check Optional Services
 async function verifyOptionalServices() {
   log.header('Optional Services');
-  
+
   const optionalServices = [
     { name: 'SendGrid', envKey: 'SENDGRID_API_KEY' },
     { name: 'Twilio', envKey: 'TWILIO_ACCOUNT_SID' },
@@ -185,7 +263,7 @@ async function verifyOptionalServices() {
     { name: 'Datadog', envKey: 'DATADOG_API_KEY' },
     { name: 'Sentry', envKey: 'SENTRY_DSN' },
     { name: 'GitHub', envKey: 'GITHUB_TOKEN' },
-    { name: 'Redis', envKey: 'REDIS_URL' }
+    { name: 'Redis', envKey: 'REDIS_URL' },
   ];
 
   for (const service of optionalServices) {
@@ -222,28 +300,28 @@ async function ensureEnvFile() {
 // 6. Generate verification report
 async function generateReport() {
   log.header('Verification Summary');
-  
+
   const requiredServices = Object.keys(results.required);
-  const requiredPassed = requiredServices.filter(s => results.required[s]);
-  const requiredFailed = requiredServices.filter(s => !results.required[s]);
-  
+  const requiredPassed = requiredServices.filter((s) => results.required[s]);
+  const requiredFailed = requiredServices.filter((s) => !results.required[s]);
+
   const optionalServices = Object.keys(results.optional);
-  const optionalConfigured = optionalServices.filter(s => results.optional[s]);
-  
+  const optionalConfigured = optionalServices.filter((s) => results.optional[s]);
+
   console.log('\n📊 Required Services:');
-  requiredPassed.forEach(s => log.success(s));
-  requiredFailed.forEach(s => log.error(s));
-  
+  requiredPassed.forEach((s) => log.success(s));
+  requiredFailed.forEach((s) => log.error(s));
+
   console.log('\n📊 Optional Services:');
-  optionalConfigured.forEach(s => log.info(`${s} (configured)`));
-  
+  optionalConfigured.forEach((s) => log.info(`${s} (configured)`));
+
   if (results.warnings.length > 0) {
     console.log('\n⚠️  Warnings:');
-    results.warnings.forEach(w => log.warning(w));
+    results.warnings.forEach((w) => log.warning(w));
   }
-  
+
   const allRequiredPass = requiredFailed.length === 0;
-  
+
   console.log('\n' + '='.repeat(50));
   if (allRequiredPass) {
     log.success('✅ All required services verified successfully!');
@@ -252,54 +330,49 @@ async function generateReport() {
     log.error('❌ Some required services failed verification');
     log.info('Please check your .env file and service configurations');
   }
-  
+
   // Save report to file
   const report = {
     timestamp: new Date().toISOString(),
     required: results.required,
     optional: results.optional,
     warnings: results.warnings,
-    passed: allRequiredPass
+    passed: allRequiredPass,
   };
-  
-  await fs.writeFile(
-    'credential-verification-report.json',
-    JSON.stringify(report, null, 2)
-  );
+
+  await fs.writeFile('credential-verification-report.json', JSON.stringify(report, null, 2));
   log.info('Report saved to: credential-verification-report.json');
-  
+
   return allRequiredPass;
 }
 
 // Main execution
 async function main() {
   console.log('🔒 FarmForecast Credential Verification');
-  console.log('=' . repeat(50));
-  
+  console.log('='.repeat(50));
+
   // Check for .env file
   const envExists = await ensureEnvFile();
   if (!envExists) {
     process.exit(1);
   }
-  
+
   // Run verifications
   await verifyNeo4j();
   await verifyAWS();
   await verifyWeatherAPIs();
   await verifyOptionalServices();
-  
+
   // Generate report
   const passed = await generateReport();
-  
+
   process.exit(passed ? 0 : 1);
 }
 
 // Run if executed directly
-if (require.main === module) {
-  main().catch(error => {
-    console.error('Verification script failed:', error);
-    process.exit(1);
-  });
-}
+main().catch((error) => {
+  console.error('Verification script failed:', error);
+  process.exit(1);
+});
 
-module.exports = { verifyNeo4j, verifyAWS, verifyWeatherAPIs };
+export { verifyNeo4j, verifyAWS, verifyWeatherAPIs };

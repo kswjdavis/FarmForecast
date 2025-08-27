@@ -1,10 +1,59 @@
 # FarmForecast Credential Setup Guide
 
+**Version:** 2.0  
+**Last Updated:** 2025-08-27  
+**Status:** Story 1.1 Implementation Complete
+
 ## Quick Start
 
-1. Copy the template: `cp .env.example .env`
-2. Fill in your credentials (see below)
-3. Run verification: `npm run verify:all`
+For new developers, run the automated setup:
+```bash
+bash scripts/onboard-developer.sh
+```
+
+For existing environments, migrate to encrypted vault:
+```bash
+node scripts/migrate-to-vault.js
+```
+
+For manual setup:
+```bash
+cp .env.example .env
+# Edit .env with your credentials
+npm run verify:all
+```
+
+## Story 1.0 Status: ✅ COMPLETE
+
+All external service credentials have been configured:
+- ✅ Neo4j Aura Database: `c2de91f6.databases.neo4j.io`
+- ✅ AWS Account: Configured with IAM user
+- ✅ Visual Crossing Weather API: 1000 requests/day
+- ✅ NOAA Climate Data: Free government access
+- ✅ GitHub Repository: kswjdavis/FarmForecast
+
+## Credential Management Architecture
+
+### Three-Layer Security Model
+
+1. **Local Development**: Plain `.env` file (git-ignored)
+2. **Encrypted Vault**: AES-256 encrypted `.env.vault` files
+3. **AWS Secrets Manager**: Production credential storage
+
+### Directory Structure
+```
+.credentials/
+├── local/
+│   ├── .env.vault       # Encrypted credentials
+│   └── DOTENV_KEY       # Decryption key (NEVER commit)
+├── staging/
+│   ├── .env.vault
+│   └── DOTENV_KEY
+├── production/
+│   ├── .env.vault
+│   └── DOTENV_KEY
+└── backups/             # Timestamped backups
+```
 
 ## Required Services Setup
 
@@ -21,9 +70,9 @@
 
 **Add to .env:**
 ```bash
-NEO4J_URI=neo4j+s://your-instance.databases.neo4j.io
+NEO4J_URI=neo4j+s://c2de91f6.databases.neo4j.io
 NEO4J_USERNAME=neo4j
-NEO4J_PASSWORD=your-generated-password
+NEO4J_PASSWORD=[secure-password]
 NEO4J_DATABASE=neo4j
 ```
 
@@ -40,95 +89,126 @@ NEO4J_DATABASE=neo4j
 
 **Add to .env:**
 ```bash
-AWS_ACCESS_KEY_ID=AKIAXXXXXXXXXXXXXXXXX
-AWS_SECRET_ACCESS_KEY=your-secret-key-here
+AWS_ACCESS_KEY_ID=AKIA42XTUYNZTLF7WDPQ
+AWS_SECRET_ACCESS_KEY=[secure-key]
 AWS_REGION=us-west-2
-AWS_ACCOUNT_ID=123456789012
 ```
 
 ### 3. Weather APIs
 
-#### Weather 20/20 (Primary Historical Data)
-**Contact:** https://weather2020.com/api-access/
+#### Visual Crossing (Primary)
+**Sign up at:** https://www.visualcrossing.com/weather-api
 
-This is a commercial service for agricultural weather data.
-- Request API access for agricultural use
-- Mention you need historical weather data for crop modeling
-
-**Add to .env:**
-```bash
-WEATHER2020_API_KEY=your-api-key
-WEATHER2020_API_URL=https://api.weather2020.com/v1
-WEATHER2020_ACCOUNT_ID=your-account-id
-```
-
-#### Kansas Mesonet (Real-time Kansas Data)
-**Sign up at:** https://mesonet.k-state.edu/about/register/
-
-- Free for educational/research use
-- Provides real-time Kansas weather station data
+- **Purpose**: Historical data, current conditions, and forecasts
+- **Free Tier**: 1000 requests per day
+- **Documentation**: https://www.visualcrossing.com/resources/documentation/
 
 **Add to .env:**
 ```bash
-MESONET_API_KEY=your-api-key
-MESONET_API_URL=https://mesonet.k-state.edu/api/v2
-MESONET_STATION_IDS=Manhattan,Colby,Garden City
+VISUALCROSSING_API_KEY=[your-visual-crossing-key]
+VISUALCROSSING_API_URL=https://weather.visualcrossing.com/VisualCrossingWebServices/rest/services
 ```
 
-#### OpenWeather API (Backup/Global)
-**Sign up at:** https://openweathermap.org/api
-
-- Free tier available (1,000 calls/day)
-- Good for forecast and current weather
-
-**Add to .env:**
-```bash
-OPENWEATHER_API_KEY=your-api-key
-OPENWEATHER_API_URL=https://api.openweathermap.org/data/2.5
-```
-
-#### NOAA API (Free Government Data)
+#### NOAA Climate Data (Required)
 **Sign up at:** https://www.ncdc.noaa.gov/cdo-web/token
 
-- Completely free
-- US government weather data
-- Rate limited but reliable
+- **Purpose**: Historical US climate data
+- **Cost**: Free (government data)
+- **Documentation**: https://www.ncdc.noaa.gov/cdo-web/webservices/v2
 
 **Add to .env:**
 ```bash
-NOAA_API_TOKEN=your-token
+NOAA_API_TOKEN=[your-noaa-token]
 NOAA_API_URL=https://www.ncdc.noaa.gov/cdo-web/api/v2
+NOAA_EMAIL=[your-email]
 ```
 
-## Optional Services
+## Setup Instructions
 
-### SendGrid (Email)
-**Sign up at:** https://sendgrid.com/
+### Automated Setup (Recommended)
 
-Free tier: 100 emails/day
+```bash
+# For new developers
+bash scripts/onboard-developer.sh
 
-### Twilio (SMS)
-**Sign up at:** https://www.twilio.com/
+# For existing .env migration
+node scripts/migrate-to-vault.js
+```
 
-Trial account includes free credits
+### Manual Setup
 
-### Datadog (Monitoring)
-**Sign up at:** https://www.datadoghq.com/
+#### Step 1: Copy Environment Template
+```bash
+cp .env.example .env
+```
 
-14-day free trial, then free tier available
+#### Step 2: Fill in your credentials
+Edit `.env` with your actual credentials from the services above.
 
-### Sentry (Error Tracking)
-**Sign up at:** https://sentry.io/
+#### Step 3: Install dependencies
+```bash
+npm install
+```
 
-Free tier: 5,000 events/month
+#### Step 4: Encrypt Credentials (Production)
+
+```bash
+# Create encrypted vault
+npx @dotenvx/dotenvx encrypt -f .env -o .credentials/local/.env.vault
+
+# Generate and save decryption key
+echo "dotenv://:key_$(openssl rand -base64 32)@dotenvx.com/vault/.env.vault?environment=$(date +%s)" > .credentials/local/DOTENV_KEY
+```
+
+#### Step 5: Store in AWS Secrets Manager
+
+```bash
+# Store all credentials in AWS
+node -e "require('./src/services/aws-secrets.js').default.storeAllCredentials()"
+```
+
+#### Step 6: Verify Credentials
+
+```bash
+npm run verify:all
+```
+
+## CI/CD Configuration
+
+### GitHub Actions Secrets
+
+Required secrets in GitHub repository settings:
+```
+NEO4J_URI
+NEO4J_USERNAME  
+NEO4J_PASSWORD
+NEO4J_DATABASE
+AWS_ACCESS_KEY_ID
+AWS_SECRET_ACCESS_KEY
+VISUALCROSSING_API_KEY
+VISUALCROSSING_API_URL
+NOAA_API_TOKEN
+NOAA_API_URL
+GH_TOKEN
+DOTENV_KEY
+```
+
+### Pre-commit Hooks
+
+Automatically installed to prevent credential leaks:
+```bash
+# Installed via husky
+.husky/pre-commit
+```
 
 ## Verification Commands
 
+Multiple verification methods available:
 ```bash
-# Check all credentials
+# Verify all services
 npm run verify:all
 
-# Check specific services
+# Verify specific service
 npm run verify:neo4j
 npm run verify:aws
 npm run verify:weather
@@ -137,12 +217,65 @@ npm run verify:weather
 npm run verify:report
 ```
 
-## Security Notes
+The enhanced verification includes:
+- Neo4j connection with retry logic
+- AWS STS identity verification
+- Visual Crossing API connectivity test
+- NOAA API token validation
+- Connection pool testing
+- Exponential backoff for retries
+- Detailed JSON report generation
 
-1. **NEVER commit .env to git** - It's in .gitignore by default
-2. **Use strong passwords** - Especially for database and AWS
-3. **Rotate credentials regularly** - Every 90 days minimum
-4. **Use separate credentials for each environment** - Dev/Staging/Prod
+## Security Best Practices
+
+### DO's
+- ✅ Use encrypted vaults for production
+- ✅ Rotate credentials every 30-90 days
+- ✅ Use AWS Secrets Manager for cloud deployments
+- ✅ Keep DOTENV_KEY files in password manager
+- ✅ Use different keys per environment
+- ✅ Run pre-commit hooks
+
+### DON'Ts
+- ❌ Never commit .env files
+- ❌ Never commit DOTENV_KEY files
+- ❌ Never log credentials
+- ❌ Never share credentials via email/Slack
+- ❌ Never use production credentials locally
+
+## Rotation Procedures
+
+### Manual Rotation
+```bash
+# Rotate vault encryption key
+node -e "require('./src/utils/vault-manager.js').default.rotateEncryptionKey('local')"
+```
+
+### AWS Secrets Manager Rotation
+```bash
+# Configure 30-day rotation
+aws secretsmanager rotate-secret \
+  --secret-id farmforecast/neo4j \
+  --rotation-lambda-arn arn:aws:lambda:...
+```
+
+## Optional Services
+
+### SendGrid (Email)
+**Sign up at:** https://sendgrid.com/
+- Free tier: 100 emails/day
+
+### Twilio (SMS)
+**Sign up at:** https://www.twilio.com/
+- Trial account includes free credits
+
+### Datadog (Monitoring)
+**Sign up at:** https://www.datadoghq.com/
+- 14-day free trial, then free tier available
+
+### Sentry (Error Tracking)
+**Sign up at:** https://sentry.io/
+- Free tier: 5,000 events/month
 
 ## Troubleshooting
 
@@ -150,29 +283,55 @@ npm run verify:report
 - Check if your IP is whitelisted in Neo4j Console
 - Verify the connection string includes `neo4j+s://` for secure connection
 - Ensure password doesn't contain special characters that need escaping
+- Check connection pool settings in DATABASE_POOL_MIN/MAX
 
 ### AWS Credentials Invalid
 - Check if access keys are active in IAM console
 - Verify the region matches your AWS setup
 - Ensure IAM user has required permissions
+- Test with AWS CLI: `aws sts get-caller-identity`
 
 ### Weather API Issues
-- Most weather APIs require account verification (check email)
-- Some have IP restrictions - check dashboard
-- Rate limits may apply - check your plan
+
+**Visual Crossing:**
+- Check API key in dashboard: https://www.visualcrossing.com/account
+- Verify you haven't exceeded 1000 requests/day limit
+- Test endpoint: `/timeline/test/today?key=YOUR_KEY&unitGroup=us`
+
+**NOAA:**
+- Token must be included in header: `token: YOUR_TOKEN`
+- Check token status at: https://www.ncdc.noaa.gov/cdo-web/token
+- Rate limit: 5 requests/second, 10,000 requests/day
+
+### Vault Decryption Failed
+- Check DOTENV_KEY file exists in `.credentials/[env]/`
+- Verify key format: `dotenv://:key_...@dotenvx.com/vault/...`
+- Try decrypting manually: `npx @dotenvx/dotenvx decrypt -f .credentials/local/.env.vault`
 
 ## For AI Agents
 
 When AI agents work on stories, they will:
-1. Automatically read credentials from `.env`
-2. Verify connections before starting work
+1. Automatically load credentials from vault or `.env`
+2. Verify connections before starting work using retry logic
 3. Report any credential issues immediately
+4. Mask sensitive data in logs
+5. Run pre-commit hooks to prevent credential exposure
 
 The verification script ensures all services are accessible before development begins, preventing blocked stories due to missing credentials.
+
+## Migration from Story 1.0
+
+Since Story 1.0 credentials are already in `.env`:
+1. Run migration script: `node scripts/migrate-to-vault.js`
+2. This creates encrypted vaults for all environments
+3. Original `.env` remains for backward compatibility
+4. Production deployments use vault or AWS Secrets Manager
 
 ## Support
 
 If you need help setting up any service:
 1. Check the service's documentation (linked above)
 2. Review error messages from `npm run verify:all`
-3. Contact the project lead with specific error messages
+3. Check the verification report: `credential-verification-report.json`
+4. Contact the project lead with specific error messages
+5. Review CI/CD logs in GitHub Actions for deployment issues
